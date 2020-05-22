@@ -14,9 +14,12 @@ include_directories(../rapidjson/include)
 include_directories(../cxxopts/include)
 include_directories(../CRCpp/inc)
 
-add_executable(vbfeditor main.cpp VbfFile.cpp VbfFile.h)
+add_library(vbf VbfFile.cpp VbfFile.h)
 if(WIN32)
-    target_link_libraries(vbfeditor ws2_32)
+    target_link_libraries(vbf ws2_32)
 endif()
+
+add_executable(vbfeditor main.cpp)
+target_link_libraries(vbfeditor vbf)
 
 install(TARGETS vbfeditor)
