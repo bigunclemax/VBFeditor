@@ -98,6 +98,10 @@ encoded_string_t FindMatch(buffers_t *buffers,
         return matchData;
     }
 
+    if ((!buffers->slidingWindow_sz) || ((buffers->slidingWindow_sz + MAX_UNCODED) >= WINDOW_SIZE)) {
+        return matchData;
+    }
+
     for (i = 0; i < uncodedLen; i++)
     {
         uncoded[i] =
@@ -111,35 +115,49 @@ encoded_string_t FindMatch(buffers_t *buffers,
     {
         if (buffers->slidingWindow[i] == uncoded[0])
         {
+            unsigned char c;
+            unsigned int k = 0;
+
             /* we matched one. how many more match? */
             j = 1;
 
-            while(uncoded[j] ==
-                buffers->slidingWindow[Wrap((i + j), WINDOW_SIZE)])
-            {
+            do {
+                if ((j + i) < buffers->slidingWindow_sz)
+                {
+                    c = buffers->slidingWindow[Wrap((i + j), WINDOW_SIZE)];
+                } else {
+                    c = uncoded[k++];
+                }
+
+                if (uncoded[j] != c)
+                    break;
+
                 j++;
 
                 if (j == uncodedLen)
                 {
                     break;
                 }
-            }
+
+            } while (1);
 
             /* end of current match */
-            if (j > matchData.length)
+            if (j >= matchData.length)
             {
                 matchData.length = j;
                 matchData.offset = i;
             }
         }
 
+#if 0
         if (j == uncodedLen)
         {
             break;
         }
+#endif
 
         CyclicInc(i, WINDOW_SIZE);
-        if (i == windowHead)
+        if ((i >= buffers->slidingWindow_sz) || (i == windowHead))
         {
             /* we're where we started */
             break;

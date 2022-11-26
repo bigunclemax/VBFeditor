@@ -82,6 +82,7 @@ int EncodeLZSS(FILE *fpIn, FILE *fpOut)
     int c;
     unsigned int i;
     unsigned int len;                       /* length of string */
+    unsigned int zero = 0;
 
     /* head of sliding window and lookahead */
     unsigned int windowHead, uncodedHead;
@@ -111,6 +112,7 @@ int EncodeLZSS(FILE *fpIn, FILE *fpOut)
     * increased chance of matching to the earlier strings.
     ************************************************************************/
     memset(buffers.slidingWindow, ' ', WINDOW_SIZE * sizeof(unsigned char));
+    buffers.slidingWindow_sz = 0;
 
     /************************************************************************
     * Copy MAX_CODED bytes from the input file into the uncoded lookahead
@@ -160,6 +162,7 @@ int EncodeLZSS(FILE *fpIn, FILE *fpOut)
 
             /* adjust the length of the match so minimum encoded len is 0 */
             adjustedLen = matchData.length - (MAX_UNCODED + 1);
+            matchData.offset++;
 
             /* match length > MAX_UNCODED.  Encode as offset and length. */
             BitFilePutBit(ENCODED, bfpOut);
@@ -176,11 +179,13 @@ int EncodeLZSS(FILE *fpIn, FILE *fpOut)
         i = 0;
         while ((i < matchData.length) && ((c = getc(fpIn)) != EOF))
         {
-            /* add old byte into sliding window and new into lookahead */
-            ReplaceChar(buffers.slidingWindow, windowHead,
-                buffers.uncodedLookahead[uncodedHead]);
+            buffers.slidingWindow[buffers.slidingWindow_sz] = buffers.uncodedLookahead[uncodedHead];
             buffers.uncodedLookahead[uncodedHead] = c;
-            CyclicInc(windowHead, WINDOW_SIZE);
+
+            buffers.slidingWindow_sz++;
+            if (buffers.slidingWindow_sz >= WINDOW_SIZE) {
+                buffers.slidingWindow_sz = 0;
+            }
             CyclicInc(uncodedHead, MAX_CODED);
             i++;
         }
@@ -188,16 +193,29 @@ int EncodeLZSS(FILE *fpIn, FILE *fpOut)
         /* handle case where we hit EOF before filling lookahead */
         while (i < matchData.length)
         {
-            ReplaceChar(buffers.slidingWindow,
-                windowHead,
+            unsigned int slidingWindow_shift = windowHead;
+            if (buffers.slidingWindow_sz < WINDOW_SIZE) {
+                slidingWindow_shift = buffers.slidingWindow_sz;
+            }
+
+            ReplaceChar(buffers.slidingWindow,slidingWindow_shift,
                 buffers.uncodedLookahead[uncodedHead]);
             /* nothing to add to lookahead here */
-            CyclicInc(windowHead, WINDOW_SIZE);
+            if (buffers.slidingWindow_sz < WINDOW_SIZE) {
+                buffers.slidingWindow_sz++;
+            } else {
+                CyclicInc(windowHead, WINDOW_SIZE);
+            }
             CyclicInc(uncodedHead, MAX_CODED);
             len--;
             i++;
         }
     }
+
+    /* write zero pair to mark compression ending */
+    BitFilePutBit(ENCODED, bfpOut);
+    BitFilePutBitsNum(bfpOut, &zero, OFFSET_BITS, sizeof(unsigned int));
+    BitFilePutBitsNum(bfpOut, &zero, LENGTH_BITS, sizeof(unsigned int));
 
     /* we've encoded everything, free bitfile structure */
     BitFileToFILE(bfpOut);

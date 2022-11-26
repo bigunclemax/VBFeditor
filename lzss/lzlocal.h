@@ -79,6 +79,7 @@ typedef struct buffers_t
 {
     unsigned char slidingWindow[WINDOW_SIZE];
     unsigned char uncodedLookahead[MAX_CODED];
+    int slidingWindow_sz;
 } buffers_t;
 
 
