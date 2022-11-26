@@ -292,7 +292,19 @@ int DecodeLZSS(FILE *fpIn, FILE *fpOut)
                 break;
             }
 
+            if (0 == code.offset)
+            {
+                if (0 == code.length) {
+                    /* ok, we reach end of compressed data */
+                    break;
+                }
+
+                /* we got invalid compressed data */
+                return -1;
+            }
+
             code.length += MAX_UNCODED + 1;
+            code.offset -= 1;
 
             /****************************************************************
             * Write out decoded string to file and lookahead.  It would be
@@ -304,15 +316,17 @@ int DecodeLZSS(FILE *fpIn, FILE *fpOut)
             {
                 c = buffers.slidingWindow[Wrap((code.offset + i), WINDOW_SIZE)];
                 putc(c, fpOut);
-                buffers.uncodedLookahead[i] = c;
+                buffers.slidingWindow[Wrap((nextChar + i), WINDOW_SIZE)] = c;
             }
 
+#if 0
             /* write out decoded string to sliding window */
             for (i = 0; i < code.length; i++)
             {
                 buffers.slidingWindow[Wrap((nextChar + i), WINDOW_SIZE)] =
                     buffers.uncodedLookahead[i];
             }
+#endif
 
             nextChar = Wrap((nextChar + code.length), WINDOW_SIZE);
         }
