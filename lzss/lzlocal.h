@@ -42,7 +42,7 @@
 *                                CONSTANTS
 ***************************************************************************/
 
-#define OFFSET_BITS     12
+#define OFFSET_BITS     10
 #define LENGTH_BITS     4
 
 #if (((1 << (OFFSET_BITS + LENGTH_BITS)) - 1) > UINT_MAX)
@@ -53,7 +53,7 @@
 #define WINDOW_SIZE     (1 << OFFSET_BITS)
 
 /* maximum match length not encoded and maximum length encoded (4 bits) */
-#define MAX_UNCODED     2
+#define MAX_UNCODED     1
 #define MAX_CODED       ((1 << LENGTH_BITS) + MAX_UNCODED)
 
 #define ENCODED     0       /* encoded string */
