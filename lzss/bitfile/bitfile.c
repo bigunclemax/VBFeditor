@@ -927,7 +927,7 @@ int BitFilePutBits(bit_file_t *stream, void *bits, const unsigned int count)
  * \c EOF is reached before all the bits are read, bits will contain every
  * bit through the last successful read.
  */
-static int BitFileGetBitsLE(bit_file_t *stream, void *bits,
+static int _BitFileGetBitsLE(bit_file_t *stream, void *bits,
     const unsigned int count, const size_t size)
 {
     unsigned char *bytes;
@@ -1124,7 +1124,7 @@ int BitFilePutBitsNum(bit_file_t *stream, void *bits, const unsigned int count,
  * error occurs after a partial write, the partially written bits will not be
  * unwritten.
  */
-static int BitFilePutBitsLE(bit_file_t *stream, void *bits,
+static int _BitFilePutBitsLE(bit_file_t *stream, void *bits,
     const unsigned int count, const size_t size)
 {
     unsigned char *bytes, tmp;
@@ -1283,3 +1283,108 @@ static int BitFileNotSupported(bit_file_t *stream, void *bits,
 }
 
 /**@}*/
+
+static int BitFileGetBitsLE(bit_file_t *stream, void *bits,
+                             const unsigned int count, const size_t size)
+{
+    unsigned char *bytes;
+    int offset, remaining, remaining_bits, returnValue;
+
+    if (count > (size * 8))
+    {
+        /* too many bits to read */
+        return EOF;
+    }
+
+    (void)size;
+    bytes = (unsigned char *)bits;
+    offset = count / 8;
+    remaining = count / 8;
+    remaining_bits = count % 8;
+
+    if (remaining_bits != 0)
+    {
+        /* read remaining bits */
+        while (remaining_bits > 0)
+        {
+            returnValue = BitFileGetBit(stream);
+
+            if (returnValue == EOF)
+            {
+                return EOF;
+            }
+
+            bytes[offset] <<= 1;
+            bytes[offset] |= (returnValue & 0x01);
+            remaining_bits--;
+        }
+        offset--;
+    }
+
+    /* read whole bytes */
+    while (remaining >= 1)
+    {
+        returnValue = BitFileGetChar(stream);
+
+        if (returnValue == EOF)
+        {
+            return EOF;
+        }
+
+        bytes[offset] = (unsigned char)returnValue;
+        remaining -= 1;
+        offset--;
+    }
+
+    return count;
+}
+
+static int BitFilePutBitsLE(bit_file_t *stream, void *bits,
+                             const unsigned int count, const size_t size)
+{
+    unsigned char *bytes, tmp;
+    int offset, remaining, remaining_bits, returnValue;
+
+    (void)size;
+    bytes = (unsigned char *)bits;
+    offset = count / 8;
+    remaining = count / 8;
+    remaining_bits = count % 8;
+
+    if (remaining_bits != 0)
+    {
+        /* write remaining bits */
+        tmp = bytes[offset];
+        tmp <<= (8 - remaining_bits);
+
+        while (remaining_bits > 0)
+        {
+            returnValue = BitFilePutBit((tmp & 0x80), stream);
+
+            if (returnValue == EOF)
+            {
+                return EOF;
+            }
+
+            tmp <<= 1;
+            remaining_bits--;
+        }
+        offset--;
+    }
+
+    /* write whole bytes */
+    while (remaining >= 1)
+    {
+        returnValue = BitFilePutChar(bytes[offset], stream);
+
+        if (returnValue == EOF)
+        {
+            return EOF;
+        }
+
+        remaining -= 1;
+        offset--;
+    }
+
+    return count;
+}
