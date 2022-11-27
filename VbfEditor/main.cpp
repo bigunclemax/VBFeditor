@@ -15,6 +15,7 @@ int main(int argc, char **argv)
         bool pack = false;
         bool unpack = false;
         bool info = false;
+        bool lzss = false;
 
         cxxopts::Options options("vbfeditor", "Tool for repacking VBF files");
         options.add_options()
@@ -25,6 +26,9 @@ int main(int argc, char **argv)
                 ("o,output","Output directory", cxxopts::value<string>()->default_value(""))
                 ("v,version","Print version")
                 ("h,help","Print help");
+
+        options.add_options("data type")
+                ("lzss","LZSS compressed data", cxxopts::value<bool>(lzss));
 
         options.parse_positional({"input"});
         options.show_positional_help();
@@ -62,7 +66,7 @@ int main(int argc, char **argv)
 
         if(unpack){
             VbfFile vbf;
-            vbf.OpenFile(result["input"].as<string>());
+            vbf.OpenFile(result["input"].as<string>(), lzss ? VBF_DATA_LZSS : VBF_DATA_UNCOMPRESSED);
             if(vbf.IsOpen())
                 vbf.Export(result["output"].as<string>());
             else
@@ -73,7 +77,7 @@ int main(int argc, char **argv)
 
         if(info){
             VbfFile vbf;
-            vbf.OpenFile(result["input"].as<string>());
+            vbf.OpenFile(result["input"].as<string>(), lzss ? VBF_DATA_LZSS : VBF_DATA_UNCOMPRESSED);
             if(vbf.IsOpen()) {
                 auto sections_count = vbf.SectionsCount();
                 cout << "Found " << sections_count << " sections" << endl;
