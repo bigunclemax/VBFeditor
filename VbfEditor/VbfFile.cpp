@@ -12,6 +12,9 @@
 #include <sstream>
 #include "VbfFile.h"
 #include "utils.h"
+extern "C" {
+#include "../lzss/lzss.h"
+}
 
 #include <rapidjson/document.h>
 #include <rapidjson/prettywriter.h>
@@ -20,7 +23,7 @@ using namespace std;
 using namespace rapidjson;
 using std::runtime_error;
 
-int VbfFile::OpenFile(const fs::path &file_path) {
+int VbfFile::OpenFile(const fs::path &file_path, VbfDataType data_type) {
 
     ifstream vbf_file(file_path, ios::binary | ios::ate);
     if(vbf_file.fail()) {
@@ -69,9 +72,7 @@ int VbfFile::OpenFile(const fs::path &file_path) {
 
     // try find content size in header
     regex_search(m_ascii_header, m, regex("\\bBytes:.*?(\\d+)"));
-    if (m.size() != 2) {
-        cout << "Warn. VBF ascii header not contain content length" << endl;
-    } else {
+    if (m.size() == 2) {
         if(m_content_size != (stoi(m[1]) + 20)) //NOTE: i don't know why but real content size 20 bytes more then header Bytes value
         {
             cout << "Warn. VBF ascii header content length and real content length mismatch" << endl;
@@ -96,18 +97,27 @@ int VbfFile::OpenFile(const fs::path &file_path) {
         new_section->length = ntohl(*reinterpret_cast<uint32_t *>(&file_buff[i]));
         i += sizeof(uint32_t);
 
-        new_section->data.resize(new_section->length);
-        copy(file_buff.begin() + i, file_buff.begin() + i + new_section->length, new_section->data.begin());
+        vector<uint8_t> section_data(new_section->length);
+
+        copy(file_buff.begin() + i, file_buff.begin() + i + new_section->length, section_data.begin());
         i += new_section->length;
 
         new_section->crc16 = ntohs(*reinterpret_cast<uint16_t *>(&file_buff[i]));
         i += sizeof(uint16_t);
 
-        auto crc = CRC::Calculate(&new_section->data[0], new_section->length, CRC::CRC_16_CCITTFALSE());
+        if (VBF_DATA_LZSS == data_type) {
+            section_data = VbfBinarySection::ModifySectionData_LZSS(section_data, false);
+            new_section->data_type = VBF_DATA_LZSS;
+        }
+
+        auto crc = CRC::Calculate(section_data.data(), section_data.size(), CRC::CRC_16_CCITTFALSE());
 
         if (new_section->crc16 != crc) {
-            cout << "Warn. VBF section at 0x" << std::hex << section_offset <<" CRC16 mismatch" << endl;
+            cout << "Warn. VBF section at 0x" << std::hex << section_offset << " CRC16 mismatch "
+                 << "(Maybe data compressed or encrypted)" << endl;
         }
+
+        new_section->data = std::move(section_data);
 
         m_bin_sections.push_back(move(new_section));
     }
@@ -144,6 +154,7 @@ int VbfFile::Export(const fs::path &out_dir) {
             stringstream _addr_hex;
             _addr_hex << "0x" << std::hex << section->start_addr;
             section_obj.AddMember("address", Value(_addr_hex.str().c_str(), allocator), allocator);
+            section_obj.AddMember("data_type", (uint32_t)section->data_type, allocator);
         }
         sections.PushBack(section_obj, allocator);
     }
@@ -190,9 +201,11 @@ int VbfFile::Import(const fs::path &conf_file_path) {
             auto sec_obj = sections[i].GetObject();
             const Value& file = sec_obj["file"];
             const Value& address = sec_obj["address"];
+            const Value& json_data_type = sec_obj["data_type"];
 
             string address_str = address.GetString();
             uint32_t vbf_section_addr = strtoul(address_str.c_str(), nullptr, 16);
+            auto vbf_data_type = (VbfDataType)json_data_type.GetInt();
 
             string vbf_section_path = config_dir.string() + "/" +file.GetString();
             ifstream vbf_section(vbf_section_path, ios::binary | std::ios::ate);
@@ -207,15 +220,22 @@ int VbfFile::Import(const fs::path &conf_file_path) {
             {
                 throw runtime_error("Import VBF file error. Can't read VBF section file '" + vbf_section_path + "'");
             }
-
             vbf_section.close();
+
+            auto vbf_section_crc = CRC::Calculate(vbf_section_data.data(), vbf_section_data.size(),
+                                                  CRC::CRC_16_CCITTFALSE());
 
             unique_ptr<VbfBinarySection> new_section(new VbfBinarySection());
 
+            if (VBF_DATA_LZSS == vbf_data_type) {
+                vbf_section_data = VbfBinarySection::ModifySectionData_LZSS(vbf_section_data, true);
+                new_section->data_type = vbf_data_type;
+            }
+
             new_section->start_addr = vbf_section_addr;
-            new_section->length = vbf_section_size;
-            new_section->data = vbf_section_data;
-            new_section->crc16 = CRC::Calculate(new_section->data.data(), new_section->length, CRC::CRC_16_CCITTFALSE());
+            new_section->length = vbf_section_data.size();
+            new_section->data = std::move(vbf_section_data);
+            new_section->crc16 = vbf_section_crc;
 
             uint32_t length_be = htonl(*reinterpret_cast<uint32_t *>(&new_section->length));
             uint32_t addr_be = htonl(*reinterpret_cast<uint32_t *>(&new_section->start_addr));
@@ -351,4 +371,66 @@ int VbfFile::GetSectionInfo(uint8_t section_idx, VbfFile::SectionInfo &info) {
     info.length = (*sections_it)->length;
 
     return 0;
+}
+
+std::vector<uint8_t> VbfBinarySection::ModifySectionData_LZSS(const std::vector<uint8_t>& section_data, bool compress) {
+
+    auto fpIn = tmpfile();
+    auto fpOut = tmpfile();
+
+    if (!fpIn || !fpOut) {
+        throw runtime_error("alloc tmpfile error");
+    }
+
+    std::vector<uint8_t> uncompressed_data(0);
+
+    try {
+        auto ret = fwrite(section_data.data(), section_data.size(), 1, fpIn);
+        if (0 >= ret) {
+            throw runtime_error("write tmpfile error");
+        }
+
+        ret = fseek(fpIn, 0, SEEK_SET);
+        if (ret) {
+            throw runtime_error("fseek tmpfile error");
+        }
+
+        if (compress) {
+            ret = EncodeLZSS(fpIn, fpOut);
+        } else {
+            ret = DecodeLZSS(fpIn, fpOut);
+        }
+
+        if (ret) {
+            throw runtime_error(string(compress ? "compression" : "decompression") + " LZSS data error");
+        }
+
+        auto uncompressed_size = ftell(fpOut);
+        if (!uncompressed_size) {
+            throw runtime_error("get data size error");
+        }
+
+        ret = fseek(fpOut, 0, SEEK_SET);
+        if (ret) {
+            throw runtime_error("fseek error");
+        }
+
+        uncompressed_data.resize(uncompressed_size);
+        ret = fread((void *) uncompressed_data.data(), uncompressed_size, 1, fpOut);
+        if (0 >= ret) {
+            throw runtime_error("read data error");
+        }
+
+    } catch (const runtime_error& e) {
+
+        fclose(fpIn);
+        fclose(fpOut);
+
+        throw e;
+    }
+
+    fclose(fpIn);
+    fclose(fpOut);
+
+    return std::move(uncompressed_data);
 }
