@@ -4,7 +4,7 @@
 #include <cxxopts.hpp>
 #include <iomanip>
 #include "VbfeditConfig.h"
-#include "VbfFile.h"
+#include "vbf.h"
 
 
 using namespace std;

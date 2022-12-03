@@ -10,8 +10,8 @@
 #include <utility>
 #include <CRC.h>
 #include <sstream>
-#include "VbfFile.h"
-#include "utils.h"
+#include "vbf.h"
+#include "../utils.h"
 
 #include <rapidjson/document.h>
 #include <rapidjson/prettywriter.h>
