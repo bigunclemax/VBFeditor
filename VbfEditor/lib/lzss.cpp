@@ -3,7 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#define EI 11  /* typically 10..13 */
+#define EI 10  /* typically 10..13 */
 #define EJ  4  /* typically 4..5 */
 #define P   1  /* If match length <= P then output one character */
 #define N (1 << EI)  /* buffer size */
@@ -47,7 +47,7 @@ void flush_bit_buffer(void)
 void output1(int c)
 {
     int mask;
-    
+
     putbit1();
     mask = 256;
     while (mask >>= 1) {
@@ -59,7 +59,7 @@ void output1(int c)
 void output2(int x, int y)
 {
     int mask;
-    
+
     putbit0();
     mask = N;
     while (mask >>= 1) {
@@ -76,8 +76,8 @@ void output2(int x, int y)
 void encode(void)
 {
     int i, j, f1, x, y, r, s, bufferend, c;
-    
-    for (i = 0; i < N - F; i++) buffer[i] = ' ';
+
+    for (i = 0; i < N - F; i++) buffer[i] = '\0';
     for (i = N - F; i < N * 2; i++) {
         if ((c = fgetc(infile)) == EOF) break;
         buffer[i] = c;  textcount++;
@@ -86,15 +86,20 @@ void encode(void)
     while (r < bufferend) {
         f1 = (F <= bufferend - r) ? F : bufferend - r;
         x = 0;  y = 1;  c = buffer[r];
-        for (i = r - 1; i >= s; i--)
-            if (buffer[i] == c) {
+        for (i = r - 1; i > s; i--)
+            if ((s >= (r - i)) && buffer[i] == c) {
                 for (j = 1; j < f1; j++)
                     if (buffer[i + j] != buffer[r + j]) break;
                 if (j > y) {
                     x = i;  y = j;
                 }
             }
-        if (y <= P) {  y = 1;  output1(c);  }
+
+        if (x >= (N - F))
+            x -= (N - F);
+        x++;
+
+        if (y <= P) {  output1(c);  }
         else output2(x & (N - 1), y - 2);
         r += y;  s += y;
         if (r >= N * 2 - F) {
@@ -133,9 +138,9 @@ int getbit(int n) /* get n bits */
 void decode(void)
 {
     int i, j, k, r, c;
-    
-    for (i = 0; i < N - F; i++) buffer[i] = ' ';
-    r = N - F;
+
+    r = 0;
+
     while ((c = getbit(1)) != EOF) {
         if (c) {
             if ((c = getbit(8)) == EOF) break;
@@ -144,6 +149,12 @@ void decode(void)
         } else {
             if ((i = getbit(EI)) == EOF) break;
             if ((j = getbit(EJ)) == EOF) break;
+
+            if (i == 0)
+                break;
+
+            i -= 1;
+
             for (k = 0; k <= j + 1; k++) {
                 c = buffer[(i + k) & (N - 1)];
                 fputc(c, outfile);
