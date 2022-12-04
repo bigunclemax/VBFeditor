@@ -1,14 +1,21 @@
-/* LZSS encoder-decoder (Haruhiko Okumura; public domain) */
+/* LZSS encoder-decoder (Haruhiko Okumura; public domain)
+ * with SmartGauges's modifications */
+
+#ifndef LZSS_HPP_INCLUDED
+#define LZSS_HPP_INCLUDED
 
 #include <vector>
 #include <cstdint>
 #include <cstdio>
 
-#define EI 10  /* typically 10..13 */
-#define EJ  4  /* typically 4..5 */
-#define P   1  /* If match length <= P then output one character */
-#define N (1 << EI)  /* buffer size */
-#define F ((1 << EJ) + P)  /* lookahead buffer size */
+namespace lzss
+{
+
+constexpr int EI = 10;  /* typically 10..13 */
+constexpr int EJ = 4;  /* typically 4..5 */
+constexpr int P = 1;  /* If match length <= P then output one character */
+constexpr int N = (1 << EI);  /* buffer size */
+constexpr int F = ((1 << EJ) + P);  /* lookahead buffer size */
 
 constexpr int ROUNDUP_DEC_RATIO = ((F * 8) + ((EI + EJ) - 1)) / (EI + EJ);
 constexpr int EXPECT_DEC_RATIO = (ROUNDUP_DEC_RATIO + (2 - 1)) / 2;
@@ -184,3 +191,7 @@ vector<uint8_t> decode(const vector<uint8_t> &cdata)
 
     return data;
 }
+
+}
+
+#endif //LZSS_HPP_INCLUDED
