@@ -15,6 +15,11 @@
 
 namespace fs = std::filesystem;
 
+enum VbfDataFormat {
+    VBF_DATA_UNCOMPRESSED = 0x0,
+    VBF_DATA_LZSS = 0x10,
+};
+
 struct VbfBinarySection {
     uint32_t start_addr;
     uint32_t length;
@@ -23,6 +28,9 @@ struct VbfBinarySection {
 };
 
 class VbfFile {
+    VbfDataFormat m_data_format = VBF_DATA_UNCOMPRESSED;
+    uint32_t m_major_ver;
+    uint32_t m_minor_ver;
     std::string m_file_name;
     uint32_t m_file_length;
     uint32_t m_CRC32;           //whole binary data CRC

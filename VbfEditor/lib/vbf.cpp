@@ -12,6 +12,7 @@
 #include <sstream>
 #include "vbf.h"
 #include "../utils.h"
+#include "lzss.hpp"
 
 #include <rapidjson/document.h>
 #include <rapidjson/prettywriter.h>
@@ -55,8 +56,22 @@ int VbfFile::OpenFile(const fs::path &file_path) {
         }
     }
 
-    //try to find file checksum
+    // parse VBF header
     smatch m;
+
+    regex_search(m_ascii_header, m, regex("\\bvbf_version.*=.*(\\d+).(\\d+);"));
+    if (m.size() == 3) {
+        m_major_ver = stoul(m[1], nullptr, 10);
+        m_minor_ver = stoul(m[2], nullptr, 10);
+    }
+
+    // check for format identifier
+    regex_search(m_ascii_header, m, regex("\\bdata_format_identifier.*=.*0x(.*);"));
+    if (m.size() == 2) {
+        m_data_format = static_cast<VbfDataFormat>(stoul(m[1], nullptr, 16));
+    }
+
+    //try to find file checksum
     regex_search(m_ascii_header, m, regex("\\bfile_checksum.*=.*0x(.*);"));
     if (m.size() != 2) {
         throw runtime_error("Parse VBF file error. ASCII header doesn't contain CRC32 checksum");
@@ -69,9 +84,7 @@ int VbfFile::OpenFile(const fs::path &file_path) {
 
     // try find content size in header
     regex_search(m_ascii_header, m, regex("\\bBytes:.*?(\\d+)"));
-    if (m.size() != 2) {
-        cout << "Warn. VBF ascii header not contain content length" << endl;
-    } else {
+    if (m.size() == 2) {
         if(m_content_size != (stoi(m[1]) + 20)) //NOTE: i don't know why but real content size 20 bytes more then header Bytes value
         {
             cout << "Warn. VBF ascii header content length and real content length mismatch" << endl;
@@ -88,7 +101,7 @@ int VbfFile::OpenFile(const fs::path &file_path) {
     auto i = data_section_offset;
     while (i < file_buff.size()) {
 
-        auto section_offset = i;
+        const auto section_offset = i;
         unique_ptr<VbfBinarySection> new_section(new VbfBinarySection());
 
         new_section->start_addr = ntohl(*reinterpret_cast<uint32_t *>(&file_buff[i]));
@@ -96,18 +109,26 @@ int VbfFile::OpenFile(const fs::path &file_path) {
         new_section->length = ntohl(*reinterpret_cast<uint32_t *>(&file_buff[i]));
         i += sizeof(uint32_t);
 
-        new_section->data.resize(new_section->length);
-        copy(file_buff.begin() + i, file_buff.begin() + i + new_section->length, new_section->data.begin());
+        vector<uint8_t> section_data(new_section->length);
+
+        copy(file_buff.begin() + i, file_buff.begin() + i + new_section->length, section_data.begin());
         i += new_section->length;
 
         new_section->crc16 = ntohs(*reinterpret_cast<uint16_t *>(&file_buff[i]));
         i += sizeof(uint16_t);
 
-        auto crc = CRC::Calculate(&new_section->data[0], new_section->length, CRC::CRC_16_CCITTFALSE());
+        if (VBF_DATA_LZSS == m_data_format) {
+            section_data = lzss::decode(section_data);
+        }
+
+        auto crc = CRC::Calculate(section_data.data(), section_data.size(), CRC::CRC_16_CCITTFALSE());
 
         if (new_section->crc16 != crc) {
-            cout << "Warn. VBF section at 0x" << std::hex << section_offset <<" CRC16 mismatch" << endl;
+            cout << "Warn. VBF section at 0x" << std::hex << section_offset << " CRC16 mismatch "
+                 << "(Maybe data compressed or encrypted)" << endl;
         }
+
+        new_section->data = std::move(section_data);
 
         m_bin_sections.push_back(move(new_section));
     }
@@ -131,6 +152,7 @@ int VbfFile::Export(const fs::path &out_dir) {
     string header_name = m_file_name + "_ascii_head.txt";
     FTUtils::bufferToFile(out_dir / header_name, &m_ascii_header[0], m_ascii_header.length());
     document.AddMember("header", Value(header_name.c_str(), allocator), allocator);
+    document.AddMember("data_type", (uint32_t)m_data_format, allocator);
 
     int i = 0;
     for (const auto& section : m_bin_sections) {
@@ -181,7 +203,10 @@ int VbfFile::Import(const fs::path &conf_file_path) {
     string vbf_header((istreambuf_iterator<char>(header_file)), istreambuf_iterator<char>());
     //TODO: validate header
 
-    m_content_size =0;
+    const Value& json_data_type = document["data_type"];
+    m_data_format = (VbfDataFormat)json_data_type.GetInt();
+
+    m_content_size = 0;
     uint32_t crc32 = 0;
     {
         const Value& sections = document["sections"];
@@ -207,15 +232,21 @@ int VbfFile::Import(const fs::path &conf_file_path) {
             {
                 throw runtime_error("Import VBF file error. Can't read VBF section file '" + vbf_section_path + "'");
             }
-
             vbf_section.close();
+
+            auto vbf_section_crc = CRC::Calculate(vbf_section_data.data(), vbf_section_data.size(),
+                                                  CRC::CRC_16_CCITTFALSE());
 
             unique_ptr<VbfBinarySection> new_section(new VbfBinarySection());
 
+            if (VBF_DATA_LZSS == m_data_format) {
+                vbf_section_data = lzss::encode(vbf_section_data);
+            }
+
             new_section->start_addr = vbf_section_addr;
-            new_section->length = vbf_section_size;
-            new_section->data = vbf_section_data;
-            new_section->crc16 = CRC::Calculate(new_section->data.data(), new_section->length, CRC::CRC_16_CCITTFALSE());
+            new_section->length = vbf_section_data.size();
+            new_section->data = std::move(vbf_section_data);
+            new_section->crc16 = vbf_section_crc;
 
             uint32_t length_be = htonl(*reinterpret_cast<uint32_t *>(&new_section->length));
             uint32_t addr_be = htonl(*reinterpret_cast<uint32_t *>(&new_section->start_addr));
